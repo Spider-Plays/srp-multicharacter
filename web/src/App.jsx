@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchNui, isBrowser, isEditorPreview, mockSelector, money } from './nui';
+import { NATIONALITIES } from './nationalities';
 
 const fullName = (c) => `${c.firstname} ${c.lastname}`;
 
@@ -54,7 +55,7 @@ function CreateModal({ slot, onClose, onSubmit, error, busy }) {
     const [form, setForm] = useState({ firstname: '', lastname: '', birthdate: '', gender: 'male', nationality: '' });
     const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
     const years = form.birthdate ? age(form.birthdate) : null;
-    const ready = form.firstname.trim().length >= 2 && form.lastname.trim().length >= 2 && form.birthdate;
+    const ready = form.firstname.trim().length >= 2 && form.lastname.trim().length >= 2 && form.birthdate && form.nationality;
 
     return (
         <div className="modal-back" onClick={onClose}>
@@ -78,7 +79,12 @@ function CreateModal({ slot, onClose, onSubmit, error, busy }) {
                             <input type="date" min="1900-01-01" value={form.birthdate} onChange={set('birthdate')} />
                         </Field>
                         <Field icon="earth-americas" label="Nationality">
-                            <input maxLength={30} placeholder="American" value={form.nationality} onChange={set('nationality')} />
+                            <select className={form.nationality ? '' : 'is-placeholder'} value={form.nationality} onChange={set('nationality')}>
+                                <option value="">Select nationality</option>
+                                {NATIONALITIES.map((nation) => (
+                                    <option key={nation} value={nation}>{nation}</option>
+                                ))}
+                            </select>
                         </Field>
                     </div>
 
@@ -116,7 +122,7 @@ function CreateModal({ slot, onClose, onSubmit, error, busy }) {
                                 <dt>Surname</dt><dd>{form.lastname || '—'}</dd>
                                 <dt>Given name</dt><dd>{form.firstname || '—'}</dd>
                                 <dt>DOB</dt><dd>{form.birthdate || '—'}{years != null && years >= 0 ? ` · ${years}y` : ''}</dd>
-                                <dt>Nationality</dt><dd>{form.nationality || 'American'}</dd>
+                                <dt>Nationality</dt><dd>{form.nationality || '—'}</dd>
                                 <dt>Sex</dt><dd>{form.gender === 'female' ? 'F' : 'M'}</dd>
                             </dl>
                         </div>

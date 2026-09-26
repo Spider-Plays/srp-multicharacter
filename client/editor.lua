@@ -4,8 +4,11 @@ local editor = {
     peds = {},        -- [slot index] = preview ped
     anims = {},       -- [slot index] = json of the anim last played
     selected = nil,
-    previewCam = nil,
+    viewCam = nil,    -- live scene camera while the panel is open
+    isolate = false,  -- preview hides the panel and frames the selected slot
     freecam = false,
+    released = false, -- admin is walking; gameplay camera is back
+    playing = false,
     returnPos = nil,
 }
 
@@ -17,16 +20,10 @@ local function animsForNui()
     return out
 end
 
--- Preview peds are clones of the admin so outfits read like a real character
+-- Placeholder peds, not clones of the admin, so every slot reads as an empty position
 local function makePreviewPed(coords)
-    local src = PlayerPedId()
-    local ped = ClonePed(src, false, false, true)
-    SceneUtil.placePed(ped, coords)
-    SetEntityVisible(ped, true, false)
-    FreezeEntityPosition(ped, true)
-    SetEntityInvincible(ped, true)
-    SetBlockingOfNonTemporaryEvents(ped, true)
-    SetPedCanRagdoll(ped, false)
+    local ped = SceneUtil.createPed(`mp_m_freemode_01`, coords)
+    SetEntityAlpha(ped, Config.EmptyAlpha, false)
     SetEntityCollision(ped, false, false)
     return ped
 end
@@ -64,15 +61,73 @@ local function applyDraft()
         end
     end
 
-    SceneUtil.ghost(editor.peds, editor.selected)
+    local overrides = {}
+    for i in pairs(editor.peds) do
+        overrides[i] = i == editor.selected and Config.EmptyAlphaSelected or Config.EmptyAlpha
+    end
+    SceneUtil.ghost(editor.peds, nil, overrides)
 end
 
-local function stopPreviewCam()
-    if not editor.previewCam then return end
-    SceneUtil.destroyCam(editor.previewCam)
-    editor.previewCam = nil
+local function destroyViewCam()
+    if editor.viewCam then
+        SceneUtil.destroyCam(editor.viewCam)
+        editor.viewCam = nil
+    end
+    if IsNewLoadSceneActive() then NewLoadSceneStop() end
     SceneUtil.clearEnvironment()
-    SendNUIMessage({ action = 'editorPreview', active = false })
+    ClearFocus()
+end
+
+local function desiredView()
+    local scene = editor.scene
+    if not scene then return end
+    local slot = editor.selected and scene.slots[editor.selected]
+    if editor.isolate and slot and slot.camera then
+        local custom = SceneUtil.normalizeCam(slot.camera)
+        if custom then return custom end
+    end
+    if editor.isolate then
+        local ped = editor.selected and editor.peds[editor.selected]
+        if ped and DoesEntityExist(ped) then
+            return SceneUtil.focusOnPed(ped, SceneUtil.cameraFor(scene))
+        end
+    end
+    return SceneUtil.cameraFor(scene)
+end
+
+-- Swap the editor camera without unloading the interior. ClearFocus here crashes
+-- inside MLOs such as the Arcadius office.
+local function dropViewCam()
+    if not editor.viewCam then return end
+    SceneUtil.destroyCam(editor.viewCam, true)
+    editor.viewCam = nil
+end
+
+local function applyCam(cam, c)
+    c = SceneUtil.normalizeCam(c)
+    if not c or not cam or not DoesCamExist(cam) then return false end
+    SetCamCoord(cam, c.x, c.y, c.z)
+    SetCamRot(cam, c.rx, c.ry, c.rz, 2)
+    SetCamFov(cam, c.fov)
+    SetFocusPosAndVel(c.x, c.y, c.z, 0.0, 0.0, 0.0)
+    return true
+end
+
+-- Keep a scripted camera on the scene so slot peds stay in view while editing
+local function ensureViewCam()
+    if not editor.open or editor.freecam or editor.playing or editor.released then return end
+    local c = desiredView()
+    if not c then return end
+    SceneUtil.setEnvironment(editor.scene)
+    if not editor.viewCam or not DoesCamExist(editor.viewCam) then
+        SceneUtil.prepareArea(editor.scene)
+        editor.viewCam = SceneUtil.createCam(c)
+        if not editor.viewCam then
+            RenderScriptCams(false, false, 0, true, true)
+        end
+    else
+        applyCam(editor.viewCam, c)
+    end
 end
 
 local function trackItems()
@@ -88,29 +143,44 @@ end
 local function closeEditor()
     editor.open = false
     editor.freecam = false
-    stopPreviewCam()
+    editor.isolate = false
+    editor.released = false
+    editor.playing = false
+    destroyViewCam()
     clearPreview()
     editor.scene = nil
+    SetNuiFocusKeepInput(false)
     SetNuiFocus(false, false)
     SendNUIMessage({ action = 'closeEditor' })
 end
 
--- Marker over the selected slot while the editor is open
+-- Chevron and facing line on every slot; the selected one is brighter
 local function markerLoop()
     CreateThread(function()
         while editor.open do
-            local slot = editor.scene and editor.selected and editor.scene.slots[editor.selected]
-            if slot and not editor.previewCam then
-                local c = slot.coords
-                DrawMarker(2, c.x, c.y, c.z + 1.25, 0.0, 0.0, 0.0, 180.0, 0.0, 0.0, 0.25, 0.25, 0.2, 216, 179, 106, 200, true, true, 2, false, nil, nil, false)
-                -- heading arrow at the feet
-                local h = math.rad(c.w or 0.0)
-                local fx, fy = -math.sin(h), math.cos(h)
-                DrawLine(c.x, c.y, c.z - 0.95, c.x + fx * 0.8, c.y + fy * 0.8, c.z - 0.95, 216, 179, 106, 255)
+            local scene = editor.scene
+            if scene and not editor.freecam then
+                for i, slot in ipairs(scene.slots) do
+                    local c = slot.coords
+                    local on = i == editor.selected
+                    local alpha = on and 220 or 110
+                    local scale = on and 0.28 or 0.16
+                    DrawMarker(2, c.x, c.y, c.z + 1.15, 0.0, 0.0, 0.0, 180.0, 0.0, 0.0, scale, scale, scale * 0.75, 216, 179, 106, alpha, true, true, 2, false, nil, nil, false)
+                    local h = math.rad(c.w or 0.0)
+                    local fx, fy = -math.sin(h), math.cos(h)
+                    DrawLine(c.x, c.y, c.z - 0.95, c.x + fx * (on and 0.9 or 0.55), c.y + fy * (on and 0.9 or 0.55), c.z - 0.95, 216, 179, 106, alpha)
+                end
             end
             Wait(0)
         end
     end)
+end
+
+local function sceneById(scenes, id)
+    for _, s in ipairs(scenes or {}) do
+        if s.id == id then return s end
+    end
+    return scenes and scenes[1]
 end
 
 RegisterNetEvent('srp-multicharacter:client:openEditor', function(data)
@@ -119,6 +189,12 @@ RegisterNetEvent('srp-multicharacter:client:openEditor', function(data)
     Scenes = data
     editor.open = true
     editor.returnPos = nil
+    editor.released = false
+    editor.isolate = false
+    editor.scene = sceneById(data.scenes, data.active)
+    editor.selected = editor.scene and editor.scene.slots[1] and 1 or nil
+    applyDraft()
+    ensureViewCam()
     SetNuiFocus(true, true)
     SendNUIMessage({
         action = 'openEditor',
@@ -128,6 +204,10 @@ RegisterNetEvent('srp-multicharacter:client:openEditor', function(data)
         weathers = Config.Weathers,
     })
     markerLoop()
+    SceneUtil.track(function() return editor.open end, function()
+        if editor.freecam or editor.playing then return {} end
+        return trackItems()
+    end, 'editorPositions')
 end)
 
 AddEventHandler('srp-multicharacter:client:scenesUpdated', function()
@@ -151,14 +231,7 @@ RegisterNUICallback('editor:draft', function(data, cb)
     editor.scene = type(data.scene) == 'table' and data.scene or nil
     editor.selected = tonumber(data.selected)
     applyDraft()
-
-    if editor.previewCam and editor.scene then
-        local c = SceneUtil.cameraFor(editor.scene)
-        SetCamCoord(editor.previewCam, c.x, c.y, c.z)
-        SetCamRot(editor.previewCam, c.rx, c.ry or 0.0, c.rz, 2)
-        SetCamFov(editor.previewCam, c.fov or 50.0)
-        SceneUtil.setEnvironment(editor.scene)
-    end
+    ensureViewCam()
 end)
 
 RegisterNUICallback('editor:replay', function(data, cb)
@@ -182,29 +255,86 @@ end)
 RegisterNUICallback('editor:preview', function(data, cb)
     cb('ok')
     if not editor.scene then return end
-    if not data.active then return stopPreviewCam() end
-    if editor.previewCam then return end
-    SceneUtil.setEnvironment(editor.scene)
-    editor.previewCam = SceneUtil.createCam(SceneUtil.cameraFor(editor.scene))
-    SendNUIMessage({ action = 'editorPreview', active = true })
-    SceneUtil.track(function() return editor.open and editor.previewCam ~= nil end, trackItems, 'editorPositions')
+    editor.isolate = data.active and true or false
+    editor.released = false
+    ensureViewCam()
+    SendNUIMessage({ action = 'editorPreview', active = editor.isolate })
 end)
 
--- Hand the mouse back so the admin can walk to a spot; E returns to the editor
-RegisterNUICallback('editor:release', function(_, cb)
-    cb('ok')
-    stopPreviewCam()
+RegisterNUICallback('editor:slotCamera', function(data, cb)
+    local i = tonumber(data.index)
+    local ped = i and editor.peds[i]
+    local scene = editor.scene
+    if not scene or not ped or not DoesEntityExist(ped) then return cb(false) end
+    cb(SceneUtil.focusOnPed(ped, SceneUtil.cameraFor(scene)))
+end)
+
+-- Walk with the menu still open. Gameplay camera so the admin can look around.
+-- Hold Left Alt to put the cursor on the menu; E leaves walk mode.
+local walkControls = false
+
+local function stopWalk()
+    if not editor.released then return end
+    editor.released = false
+end
+
+local function startWalk()
+    editor.released = true
+    editor.isolate = false
+    destroyViewCam()
+    SendNUIMessage({ action = 'editorPreview', active = false })
+    local ped = PlayerPedId()
+    FreezeEntityPosition(ped, false)
+    SetEntityVisible(ped, true, false)
+    SetNuiFocusKeepInput(false)
     SetNuiFocus(false, false)
+    if walkControls then return end
+    walkControls = true
     CreateThread(function()
-        while editor.open do
-            if IsControlJustReleased(0, 38) then -- E
-                SetNuiFocus(true, true)
-                SendNUIMessage({ action = 'editorFocus' })
-                return
+        local cursor = false
+        while editor.open and editor.released and not editor.freecam do
+            local alt = IsControlPressed(0, 19) or IsDisabledControlPressed(0, 19)
+            if alt then
+                if not cursor then
+                    cursor = true
+                    SetNuiFocus(true, true)
+                    SetNuiFocusKeepInput(true)
+                end
+                DisableControlAction(0, 1, true)
+                DisableControlAction(0, 2, true)
+                DisableControlAction(0, 24, true)
+                DisableControlAction(0, 25, true)
+                DisableControlAction(0, 106, true)
+                DisableControlAction(0, 140, true)
+                DisableControlAction(0, 141, true)
+                DisableControlAction(0, 142, true)
+                DisableControlAction(0, 257, true)
+            elseif cursor then
+                cursor = false
+                SetNuiFocusKeepInput(false)
+                SetNuiFocus(false, false)
+            elseif IsControlJustReleased(0, 38) then -- E
+                editor.released = false
             end
             Wait(0)
         end
+        walkControls = false
+        SetNuiFocusKeepInput(false)
+        if editor.open and not editor.freecam and not editor.playing then
+            ensureViewCam()
+            SetNuiFocus(true, true)
+            SendNUIMessage({ action = 'editorFocus' })
+        end
     end)
+end
+
+RegisterNUICallback('editor:release', function(data, cb)
+    cb('ok')
+    if data.walk == false then
+        stopWalk()
+    else
+        startWalk()
+    end
 end)
 
 RegisterNUICallback('editor:goto', function(_, cb)
@@ -239,66 +369,128 @@ RegisterNUICallback('editor:return', function(_, cb)
     DoScreenFadeIn(400)
 end)
 
+local function axis(control)
+    local v = GetControlNormal(0, control)
+    if v == 0.0 then v = GetDisabledControlNormal(0, control) end
+    if v ~= v then return 0.0 end
+    if v > 2.0 then return 2.0 end
+    if v < -2.0 then return -2.0 end
+    return v
+end
+
+local function pressed(control)
+    return IsControlPressed(0, control) or IsDisabledControlPressed(0, control)
+end
+
+local function justPressed(control)
+    return IsControlJustPressed(0, control) or IsDisabledControlJustPressed(0, control)
+end
+
 -- Free camera: WASD move, Q/E down/up, mouse look, Shift fast, Alt slow,
--- scroll = FOV, Enter = use this view, Backspace = cancel
+-- scroll = FOV, Enter = use this view, Backspace or Esc = cancel.
+-- Look controls stay enabled; movement is read after being blocked on the ped
+-- so the admin does not walk while flying the camera.
 RegisterNUICallback('editor:freecam', function(data, cb)
     cb('ok')
     if editor.freecam or not editor.scene then return end
-    stopPreviewCam()
+
+    local start = type(data.start) == 'table' and SceneUtil.normalizeCam(data.start) or nil
+    if not start and type(data.target) == 'string' then
+        local slotIndex = tonumber(data.target:match('^slot:(%d+)$'))
+        local ped = slotIndex and editor.peds[slotIndex]
+        if ped and DoesEntityExist(ped) then
+            start = SceneUtil.normalizeCam(SceneUtil.focusOnPed(ped, SceneUtil.cameraFor(editor.scene)))
+        end
+    end
+    start = start or SceneUtil.cameraFor(editor.scene)
+    if not start then return end
+
     editor.freecam = true
+    editor.released = false
+    editor.isolate = false
+    dropViewCam()
+    SendNUIMessage({ action = 'editorPreview', active = false })
+    SetNuiFocusKeepInput(false)
     SetNuiFocus(false, false)
     SendNUIMessage({ action = 'editorFreecam', active = true })
 
-    local start = type(data.start) == 'table' and data.start or editor.scene.camera or SceneUtil.autoCamera(editor.scene.slots)
     local pos = vec3(start.x, start.y, start.z)
-    local rx, rz, fov = start.rx, start.rz, start.fov or 50.0
+    local rx, rz, fov = start.rx, start.rz, start.fov
+    local anchor = SceneUtil.center(editor.scene.slots)
     local cam = SceneUtil.createCam(start)
+    if not cam then
+        editor.freecam = false
+        ensureViewCam()
+        SetNuiFocus(true, true)
+        SendNUIMessage({ action = 'editorFreecam', active = false })
+        return
+    end
     SceneUtil.setEnvironment(editor.scene)
 
     CreateThread(function()
         local result
-        while editor.freecam do
-            DisableAllControlActions(0)
+        local block = { 19, 21, 22, 24, 25, 30, 31, 32, 33, 34, 35, 36, 37, 38, 44, 45, 140, 141, 142, 199, 200, 257, 263, 264 }
+        while editor.freecam and DoesCamExist(cam) do
             HideHudAndRadarThisFrame()
+            for i = 1, #block do DisableControlAction(0, block[i], true) end
 
-            rz = rz - GetDisabledControlNormal(0, 1) * 8.0
-            rx = math.max(-89.0, math.min(89.0, rx - GetDisabledControlNormal(0, 2) * 8.0))
+            local mx, my = axis(1), axis(2)
+            rz = (rz - mx * 6.0) % 360.0
+            rx = math.max(-89.0, math.min(89.0, rx - my * 6.0))
 
-            local speed = IsDisabledControlPressed(0, 21) and 0.25 or IsDisabledControlPressed(0, 19) and 0.01 or 0.05
+            local dt = GetFrameTime()
+            if dt > 0.05 then dt = 0.05 end
+            local meters = (pressed(21) and 16.0 or pressed(19) and 1.4 or 5.0) * dt
             local h, p = math.rad(rz), math.rad(rx)
-            local fwd = vec3(-math.sin(h) * math.cos(p), math.cos(h) * math.cos(p), math.sin(p))
-            local right = vec3(math.cos(h), math.sin(h), 0.0)
+            local cosP = math.cos(p)
+            local fx, fy, fz = -math.sin(h) * cosP, math.cos(h) * cosP, math.sin(p)
+            local rxr, ryr = math.cos(h), math.sin(h)
+            local forward, strafe, vertical = 0.0, 0.0, 0.0
+            if pressed(32) then forward = 1.0 end
+            if pressed(33) then forward = forward - 1.0 end
+            if pressed(35) then strafe = 1.0 end
+            if pressed(34) then strafe = strafe - 1.0 end
+            if pressed(38) then vertical = 1.0 end
+            if pressed(44) then vertical = vertical - 1.0 end
+            pos = vec3(
+                pos.x + (fx * forward + rxr * strafe) * meters,
+                pos.y + (fy * forward + ryr * strafe) * meters,
+                pos.z + (fz * forward + vertical) * meters
+            )
 
-            if IsDisabledControlPressed(0, 32) then pos = pos + fwd * speed end   -- W
-            if IsDisabledControlPressed(0, 33) then pos = pos - fwd * speed end   -- S
-            if IsDisabledControlPressed(0, 34) then pos = pos - right * speed end -- A
-            if IsDisabledControlPressed(0, 35) then pos = pos + right * speed end -- D
-            if IsDisabledControlPressed(0, 38) then pos = pos + vec3(0, 0, speed) end -- E
-            if IsDisabledControlPressed(0, 44) then pos = pos - vec3(0, 0, speed) end -- Q
-            if IsDisabledControlJustPressed(0, 241) then fov = math.max(10.0, fov - 2.0) end
-            if IsDisabledControlJustPressed(0, 242) then fov = math.min(120.0, fov + 2.0) end
+            local ox, oy, oz = pos.x - anchor.x, pos.y - anchor.y, pos.z - anchor.z
+            local reach = math.sqrt(ox * ox + oy * oy + oz * oz)
+            if reach > 80.0 then
+                local scale = 80.0 / reach
+                pos = vec3(anchor.x + ox * scale, anchor.y + oy * scale, anchor.z + oz * scale)
+            end
+
+            if justPressed(241) or justPressed(15) then fov = math.max(10.0, fov - 2.0) end
+            if justPressed(242) or justPressed(14) then fov = math.min(120.0, fov + 2.0) end
 
             SetCamCoord(cam, pos.x, pos.y, pos.z)
             SetCamRot(cam, rx, 0.0, rz, 2)
             SetCamFov(cam, fov)
             SetFocusPosAndVel(pos.x, pos.y, pos.z, 0.0, 0.0, 0.0)
 
-            if IsDisabledControlJustPressed(0, 191) then -- Enter
+            if justPressed(191) or justPressed(201) then
                 result = { x = pos.x, y = pos.y, z = pos.z, rx = rx, ry = 0.0, rz = rz, fov = fov }
                 break
-            elseif IsDisabledControlJustPressed(0, 194) then -- Backspace
+            elseif justPressed(194) or justPressed(202) or justPressed(200) then
                 break
             end
             Wait(0)
         end
 
         editor.freecam = false
-        SceneUtil.destroyCam(cam)
-        ClearFocus()
-        SceneUtil.clearEnvironment()
+        SceneUtil.destroyCam(cam, true)
         if editor.open then
+            ensureViewCam()
             SetNuiFocus(true, true)
             SendNUIMessage({ action = 'editorFreecam', active = false, camera = result, target = data.target })
+        else
+            RenderScriptCams(false, false, 0, true, true)
+            ClearFocus()
         end
     end)
 end)
@@ -312,10 +504,10 @@ end)
 
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() or not editor.open then return end
+    SetNuiFocusKeepInput(false)
     SetNuiFocus(false, false)
     clearPreview()
-    if editor.previewCam then SceneUtil.destroyCam(editor.previewCam) end
-    ClearFocus()
+    destroyViewCam()
 end)
 
 -- Preview intro shots: one (data.index) or the whole sequence once
@@ -327,8 +519,9 @@ RegisterNUICallback('editor:playIntro', function(data, cb)
     if index then shots = { shots[index] } end
     if #shots == 0 then return end
 
-    stopPreviewCam()
     editor.playing = true
+    editor.released = false
+    dropViewCam()
     SendNUIMessage({ action = 'editorPlaying', active = true })
     SceneUtil.setEnvironment(editor.scene)
 
@@ -349,6 +542,7 @@ RegisterNUICallback('editor:playIntro', function(data, cb)
         SceneUtil.destroyCam(cam)
         ClearFocus()
         SceneUtil.clearEnvironment()
+        if editor.open then ensureViewCam() end
         SendNUIMessage({ action = 'editorPlaying', active = false })
     end)
 end)

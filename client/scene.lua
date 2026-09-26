@@ -81,6 +81,10 @@ function SceneUtil.createPed(model, coords, skin)
 
     if not SceneUtil.applySkin(ped, skin) then
         SetPedDefaultComponentVariation(ped)
+        local model = GetEntityModel(ped)
+        if model == `mp_m_freemode_01` or model == `mp_f_freemode_01` then
+            SetPedHeadBlendData(ped, 21, 0, 0, 21, 0, 0, 0.5, 0.5, 0.0, false)
+        end
     end
     return ped
 end
@@ -95,9 +99,10 @@ end
 -- Non-selected peds are ghosted like passive mode; alpha eases toward its target
 local fades, fading = {}, false
 
-function SceneUtil.ghost(peds, selected)
+function SceneUtil.ghost(peds, selected, overrides)
     for k, ped in pairs(peds) do
-        fades[ped] = (selected == nil or k == selected) and 255 or Config.GhostAlpha
+        fades[ped] = (overrides and overrides[k])
+            or ((selected == nil or k == selected) and 255 or Config.GhostAlpha)
     end
     if fading then return end
     fading = true
@@ -130,10 +135,26 @@ local function lookRotation(from, to)
 end
 SceneUtil.lookRotation = lookRotation
 
+-- Natives crash the client if a coord or rotation is nil/NaN, so every camera
+-- is reduced to plain numbers before it is handed to a native.
+function SceneUtil.normalizeCam(c)
+    if type(c) ~= 'table' then return nil end
+    local x, y, z = tonumber(c.x), tonumber(c.y), tonumber(c.z)
+    if not x or not y or not z or x ~= x or y ~= y or z ~= z then return nil end
+    local rx, ry, rz = tonumber(c.rx) or 0.0, tonumber(c.ry) or 0.0, tonumber(c.rz) or 0.0
+    local fov = tonumber(c.fov) or 50.0
+    if rx ~= rx or ry ~= ry or rz ~= rz or fov ~= fov then return nil end
+    if rx < -89.0 then rx = -89.0 elseif rx > 89.0 then rx = 89.0 end
+    if fov < 10.0 then fov = 10.0 elseif fov > 120.0 then fov = 120.0 end
+    return { x = x, y = y, z = z, rx = rx, ry = ry, rz = rz, fov = fov }
+end
+
 -- Glide from whatever is on screen right now to `c`. Safe to call mid-transition:
 -- we snapshot the rendered view first so rapid switching never snaps.
 ---@return number cam the new active cam
 function SceneUtil.glide(current, c, duration, dofDistance)
+    c = SceneUtil.normalizeCam(c)
+    if not c then return current end
     local from = current
     if current and IsCamInterpolating(current) then
         local p, r = GetFinalRenderedCamCoord(), GetFinalRenderedCamRot(2)
@@ -143,7 +164,8 @@ function SceneUtil.glide(current, c, duration, dofDistance)
         if DoesCamExist(current) then DestroyCam(current, false) end
     end
 
-    local cam = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', c.x, c.y, c.z, c.rx, c.ry or 0.0, c.rz, c.fov or 50.0, false, 2)
+    local cam = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', c.x, c.y, c.z, c.rx, c.ry, c.rz, c.fov, false, 2)
+    if not cam or cam == 0 or not DoesCamExist(cam) then return current end
     if dofDistance then
         SetCamUseShallowDofMode(cam, true)
         SetCamNearDof(cam, math.max(0.1, dofDistance - 0.9))
@@ -214,13 +236,15 @@ end
 
 -- Cut to `shot.from` and drift to `shot.to`. Returns the drifting cam.
 function SceneUtil.playShot(shot, previous)
-    local f = shot.from
-    local from = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', f.x, f.y, f.z, f.rx, 0.0, f.rz, f.fov or 50.0, true, 2)
+    local f, t = SceneUtil.normalizeCam(shot.from), SceneUtil.normalizeCam(shot.to)
+    if not f or not t then return previous end
+    local from = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', f.x, f.y, f.z, f.rx, f.ry, f.rz, f.fov, true, 2)
+    if not from or from == 0 or not DoesCamExist(from) then return previous end
     RenderScriptCams(true, false, 0, true, true)
     if previous and previous ~= from and DoesCamExist(previous) then DestroyCam(previous, false) end
 
-    local t = shot.to
-    local to = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', t.x, t.y, t.z, t.rx, 0.0, t.rz, t.fov or 50.0, false, 2)
+    local to = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', t.x, t.y, t.z, t.rx, t.ry, t.rz, t.fov, false, 2)
+    if not to or to == 0 or not DoesCamExist(to) then return from end
     SetCamActiveWithInterp(to, from, shot.duration or 6000, 1, 1)
     SetTimeout((shot.duration or 6000) + 200, function()
         if DoesCamExist(from) then DestroyCam(from, false) end
@@ -228,22 +252,59 @@ function SceneUtil.playShot(shot, previous)
     return to
 end
 
+-- Close-up of one ped, shot from the wide camera's side
+function SceneUtil.focusOnPed(ped, wide)
+    if not ped or not DoesEntityExist(ped) then return nil end
+    wide = SceneUtil.normalizeCam(wide) or SceneUtil.normalizeCam(SceneUtil.autoCamera({})) or { x = 0.0, y = 1.0, z = 0.0, rx = 0.0, ry = 0.0, rz = 0.0, fov = 50.0 }
+    local head = GetPedBoneCoords(ped, 31086, 0.0, 0.0, 0.0)
+    if not head then return nil end
+    local F = Config.Focus
+    local target = vec3(head.x, head.y, head.z - 0.2)
+    local dx, dy = wide.x - target.x, wide.y - target.y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 0.01 then dx, dy, len = 0.0, 1.0, 1.0 end
+    dx, dy = dx / len, dy / len
+
+    local pos = vec3(target.x + dx * F.distance, target.y + dy * F.distance, head.z + F.height)
+    local rx, rz = lookRotation(pos, target)
+    local dist = #(pos - target)
+    return { x = pos.x, y = pos.y, z = pos.z, rx = rx, ry = 0.0, rz = rz, fov = F.fov }, dist
+end
+
 function SceneUtil.cameraFor(scene)
-    return scene.camera or SceneUtil.autoCamera(scene.slots)
+    return SceneUtil.normalizeCam(scene.camera) or SceneUtil.autoCamera(scene.slots)
+end
+
+-- Stream the scene around the slots without moving the player (editor view)
+function SceneUtil.prepareArea(scene)
+    local c = SceneUtil.center(scene.slots)
+    SetFocusPosAndVel(c.x, c.y, c.z, 0.0, 0.0, 0.0)
+    RequestCollisionAtCoord(c.x, c.y, c.z)
+    local interior = GetInteriorAtCoords(c.x, c.y, c.z)
+    if interior ~= 0 then PinInteriorInMemory(interior) end
+    if not IsNewLoadSceneActive() then
+        NewLoadSceneStartSphere(c.x, c.y, c.z, 50.0, 0)
+    end
 end
 
 function SceneUtil.createCam(c)
-    local cam = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', c.x, c.y, c.z, c.rx, c.ry or 0.0, c.rz, c.fov or 50.0, false, 2)
+    c = SceneUtil.normalizeCam(c)
+    if not c then return nil end
+    local cam = CreateCamWithParams('DEFAULT_SCRIPTED_CAMERA', c.x, c.y, c.z, c.rx, c.ry, c.rz, c.fov, false, 2)
+    if not cam or cam == 0 or not DoesCamExist(cam) then return nil end
     SetCamActive(cam, true)
     RenderScriptCams(true, false, 0, true, true)
     return cam
 end
 
-function SceneUtil.destroyCam(cam)
-    if not cam then return end
-    RenderScriptCams(false, false, 0, true, true)
-    SetCamActive(cam, false)
-    DestroyCam(cam, false)
+function SceneUtil.destroyCam(cam, keepRendering)
+    if cam and cam ~= 0 and DoesCamExist(cam) then
+        SetCamActive(cam, false)
+        DestroyCam(cam, false)
+    end
+    if not keepRendering then
+        RenderScriptCams(false, false, 0, true, true)
+    end
 end
 
 function SceneUtil.setEnvironment(scene)

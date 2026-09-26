@@ -18,6 +18,11 @@ Config.EnableDelete = true
 -- Alpha for characters that aren't selected (GTA passive mode uses ~150)
 Config.GhostAlpha = 140
 
+-- Empty slots use a default freemode ped. It stays translucent so it never
+-- reads as a real character. The selected empty slot is a little stronger.
+Config.EmptyAlpha = 100
+Config.EmptyAlphaSelected = 175
+
 -- Scene coords are stored as ped coords (what GetEntityCoords returns, ~1m above the feet).
 -- CreatePed places the feet at z, so we drop the ped by this much.
 Config.PedZOffset = -1.0
@@ -64,6 +69,7 @@ Config.EditorGroup = 'group.admin'
 ---------------------------------------------------------------------
 -- Scenes
 --   camera = nil  -> auto-framed from the slots. Use the editor's free camera to set one.
+--   slots[n].camera = { x, y, z, rx, ry, rz, fov }  -- close-up used when this slot is selected
 --   slots[n].anim = { preset = '<id from Config.Animations>' }
 --                 | { dict = '', clip = '', flag = 1 }
 --                 | { scenario = 'WORLD_HUMAN_...' }

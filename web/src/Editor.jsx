@@ -153,6 +153,11 @@ export default function Editor() {
     const freecamResultRef = useRef();
     freecamResultRef.current = (target, cam) => {
         if (!target) return updateCameraRef.current(cam);
+        if (target.startsWith('slot:')) {
+            const i = Number(target.slice(5)) - 1;
+            updateScene((s) => { if (s.slots[i]) s.slots[i].camera = cam; return s; });
+            return;
+        }
         const [, which, end] = target.split(':');
         updateScene((s) => {
             s.intro = s.intro || [];
@@ -227,16 +232,26 @@ export default function Editor() {
     };
 
     const togglePreview = () => fetchNui('editor:preview', { active: !preview });
-    const walk = () => { setMode('walk'); fetchNui('editor:release'); };
-    const freecam = () => fetchNui('editor:freecam');
-    const shotCam = (i, end) => fetchNui('editor:freecam', { target: `intro:${i}:${end}`, start: scene.intro[i][end] });
-    const addShot = () => fetchNui('editor:freecam', { target: 'intro:new', start: scene.intro?.at(-1)?.to });
+    const walk = () => {
+        const next = mode !== 'walk';
+        setMode(next ? 'walk' : 'panel');
+        if (next) setPreview(false);
+        fetchNui('editor:release', { walk: next });
+    };
+    const freecam = (target, start) => fetchNui('editor:freecam', { target, start });
+    const shotCam = (i, end) => freecam(`intro:${i}:${end}`, scene.intro[i][end]);
+    const addShot = () => freecam('intro:new', scene.intro?.at(-1)?.to);
     const setIntro = (fn) => updateScene((s) => { s.intro = fn(s.intro ? clone(s.intro) : []); if (!s.intro?.length) s.intro = null; return s; });
     const customiseIntro = async () => {
         const shots = await fetchNui('editor:autoIntro');
         if (shots) setIntro(() => shots.map((sh) => ({ ...sh, from: roundCam(sh.from), to: roundCam(sh.to) })));
     };
     const roundCam = (c) => ({ x: r2(c.x), y: r2(c.y), z: r2(c.z), rx: r2(c.rx), ry: 0, rz: r2(c.rz), fov: r2(c.fov) });
+    const setSlotCam = (k, v) => updateSlot((sl) => { if (sl.camera) sl.camera[k] = k === 'rx' ? Math.max(-89, Math.min(89, r2(v))) : r2(v); });
+    const frameSlot = async () => {
+        const c = await fetchNui('editor:slotCamera', { index: slotIdx + 1 });
+        if (c) updateSlot((sl) => { sl.camera = roundCam(c); });
+    };
 
     useEffect(() => {
         const onKey = (e) => {
@@ -249,9 +264,6 @@ export default function Editor() {
 
     if (!open) return null;
 
-    if (mode === 'walk') {
-        return <div className="ed-hint"><kbd>E</kbd> Back to the editor · walk to a spot, then "Place at my position"</div>;
-    }
     if (mode === 'freecam') {
         return (
             <div className="ed-hint">
@@ -262,20 +274,31 @@ export default function Editor() {
     }
 
     return (
-        <div id="editor" className={preview || playing ? 'previewing' : ''}>
+        <div id="editor" className={`${preview || playing ? 'previewing' : ''}${mode === 'walk' ? ' walking' : ''}`}>
             {playing && (
                 <div className="ed-previewbar">
                     <span><i className="fa-solid fa-film" /> Playing intro</span>
                     <button className="ed-btn" onClick={() => fetchNui('editor:stopIntro')}>Stop <kbd>Esc</kbd></button>
                 </div>
             )}
-            {preview && positions.map((p) => p.visible && (
-                <div key={p.key} className={`ed-tag${p.key === slotIdx + 1 ? ' on' : ''}`} style={{ left: `${p.x}%`, top: `${p.y}%` }}
+            {!playing && positions.map((p) => p.visible && (
+                <div key={p.key} className={`ed-tag${p.key === slotIdx + 1 ? ' on' : ''}${scene?.slots[p.key - 1]?.camera ? ' cam' : ''}`} style={{ left: `${p.x}%`, top: `${p.y}%` }}
                     onClick={() => setSlotIdx(p.key - 1)}>
                     <span>Slot {p.key}</span>
-                    <small>Name · Job · Money</small>
+                    <small>{scene?.slots[p.key - 1]?.camera ? 'Custom camera' : 'Empty slot'}</small>
                 </div>
             ))}
+
+            {mode === 'walk' && (
+                <div className="ed-previewbar">
+                    <span><i className="fa-solid fa-person-walking" /> Walking — menu stays open</span>
+                    <span><kbd>Alt</kbd> cursor · <kbd>E</kbd> stop</span>
+                </div>
+            )}
+
+            {!preview && !playing && mode !== 'walk' && (
+                <div className="ed-livehint"><i className="fa-solid fa-location-dot" /> Live view · labels follow each ped</div>
+            )}
 
             {preview && (
                 <div className="ed-previewbar">
@@ -333,7 +356,7 @@ export default function Editor() {
                         <section>
                             <h3>Camera <em>{scene.camera ? 'custom' : 'auto-framed'}</em></h3>
                             <div className="ed-grid3">
-                                <button className="ed-btn" onClick={freecam}><i className="fa-solid fa-camera" /> Free cam</button>
+                                <button className="ed-btn" onClick={() => freecam()}><i className="fa-solid fa-camera" /> Free cam</button>
                                 <button className={`ed-btn${preview ? ' on' : ''}`} onClick={togglePreview}><i className="fa-solid fa-eye" /> Preview</button>
                                 {scene.camera
                                     ? <button className="ed-btn" onClick={() => updateCameraRef.current(null)}><i className="fa-solid fa-wand-magic-sparkles" /> Auto</button>
@@ -394,7 +417,7 @@ export default function Editor() {
                             </div>
                             <div className="ed-grid3">
                                 <button className="ed-btn" disabled={scene.slots.length >= 12} onClick={addSlot}><i className="fa-solid fa-user-plus" /> Add here</button>
-                                <button className="ed-btn" onClick={walk}><i className="fa-solid fa-person-walking" /> Walk</button>
+                                <button className={`ed-btn${mode === 'walk' ? ' on' : ''}`} onClick={walk}><i className="fa-solid fa-person-walking" /> {mode === 'walk' ? 'Stop' : 'Walk'}</button>
                                 <button className="ed-btn" onClick={() => fetchNui('editor:goto')}><i className="fa-solid fa-location-arrow" /> Go to</button>
                             </div>
                             <button className="ed-btn wide subtle" onClick={() => fetchNui('editor:return')}><i className="fa-solid fa-rotate-left" /> Return to where I was</button>
@@ -427,6 +450,26 @@ export default function Editor() {
                                 <Num label="Heading" value={slot.coords.w} step={hStep} onChange={(v) => setCoord('w', v)} />
                             </div>
                             <button className="ed-btn wide" onClick={placeHere}><i className="fa-solid fa-crosshairs" /> Place at my position</button>
+
+                            <h4>Slot camera <em>{slot.camera ? 'custom' : 'auto focus'}</em></h4>
+                            <p className="ed-note">Used when a player selects this slot. The wide scene camera still shows every ped.</p>
+                            <div className="ed-grid3">
+                                <button className="ed-btn" onClick={() => freecam(`slot:${slotIdx + 1}`, slot.camera || undefined)}><i className="fa-solid fa-camera" /> Place</button>
+                                <button className="ed-btn" onClick={frameSlot}><i className="fa-solid fa-crosshairs" /> Frame ped</button>
+                                {slot.camera
+                                    ? <button className="ed-btn" onClick={() => updateSlot((sl) => { sl.camera = null; })}><i className="fa-solid fa-wand-magic-sparkles" /> Auto</button>
+                                    : <button className="ed-btn" onClick={togglePreview}><i className="fa-solid fa-eye" /> Preview</button>}
+                            </div>
+                            {slot.camera && (
+                                <div className="ed-nums">
+                                    <Num label="X" value={slot.camera.x} step={step} onChange={(v) => setSlotCam('x', v)} />
+                                    <Num label="Y" value={slot.camera.y} step={step} onChange={(v) => setSlotCam('y', v)} />
+                                    <Num label="Z" value={slot.camera.z} step={step} onChange={(v) => setSlotCam('z', v)} />
+                                    <Num label="Pitch" value={slot.camera.rx} step={1} onChange={(v) => setSlotCam('rx', v)} />
+                                    <Num label="Yaw" value={slot.camera.rz} step={hStep} onChange={(v) => setSlotCam('rz', v)} />
+                                    <Num label="FOV" value={slot.camera.fov} step={1} onChange={(v) => setSlotCam('fov', Math.max(10, Math.min(120, v)))} />
+                                </div>
+                            )}
 
                             <h4>Animation</h4>
                             <AnimEditor

@@ -174,7 +174,9 @@ local function cleanScene(s, index)
         for i = 1, math.min(#s.slots, 12) do
             local slot = s.slots[i]
             local coords = type(slot) == 'table' and cleanCoords(slot.coords)
-            if coords then slots[#slots + 1] = { coords = coords, anim = cleanAnim(slot.anim) } end
+            if coords then
+                slots[#slots + 1] = { coords = coords, anim = cleanAnim(slot.anim), camera = cleanCamera(slot.camera) }
+            end
         end
     end
     local weather = token(s.weather, '^[%u]+$', 20)

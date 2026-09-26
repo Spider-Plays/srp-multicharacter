@@ -46,6 +46,11 @@ const mockAnims = [
 ];
 
 export function mockEditor() {
+    post({ action: 'editorPositions', items: [
+        { key: 1, visible: true, x: 28, y: 46 },
+        { key: 2, visible: true, x: 46, y: 40 },
+        { key: 3, visible: true, x: 62, y: 50 },
+    ] }, 80);
     post({
         action: 'openEditor',
         active: 'arcadius',
@@ -66,7 +71,8 @@ function mockResponse(name, data) {
     console.log('[nui]', name, data);
     if (name === 'editor:myPosition') return { x: -130 + Math.random() * 5, y: -638 + Math.random() * 5, z: 167.82, w: Math.random() * 360 };
     if (name === 'editor:autoCamera') return { x: -133.07, y: -644.64, z: 168.5, rx: -3, ry: 0, rz: 209.7, fov: 50 };
-    if (name === 'editor:freecam') post({ action: 'editorFreecam', active: false, camera: { x: -134.2, y: -646.1, z: 168.9, rx: -6.5, ry: 0, rz: 205.3, fov: 45 } }, 800);
+    if (name === 'editor:slotCamera') return { x: -140.2, y: -638.4, z: 168.2, rx: -3.5, ry: 0, rz: 160, fov: 38 };
+    if (name === 'editor:freecam') post({ action: 'editorFreecam', active: false, target: data.target, camera: { x: -134.2, y: -646.1, z: 168.9, rx: -6.5, ry: 0, rz: 205.3, fov: 45 } }, 400);
     if (name === 'create') return { ok: true };
     if (name === 'play' || name === 'delete') return true;
     return 'ok';

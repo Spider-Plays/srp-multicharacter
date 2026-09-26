@@ -29,7 +29,7 @@
     display: flex; align-items: center; gap: 8px;
     font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold);
 }
-.ed-panel h3 em { font-style: normal; color: var(--muted); letter-spacing: .5px; text-transform: none; font-weight: 600; }
+.ed-panel h3 em, .ed-panel h4 em { font-style: normal; color: var(--muted); letter-spacing: .5px; text-transform: none; font-weight: 600; }
 .ed-panel h4 { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
 .ed-note { color: var(--muted); font-size: 13px; }
 
@@ -127,6 +127,7 @@
     background: rgba(18,17,15,.9); border: 1px solid var(--line);
     font-weight: 600;
 }
+#editor.walking .ed-previewbar { pointer-events: none; }
 .ed-previewbar i { color: var(--gold); margin-right: 4px; }
 .ed-tag {
     position: absolute; transform: translate(-50%, -100%);
@@ -138,6 +139,14 @@
 .ed-tag span { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1.5px; }
 .ed-tag small { color: var(--muted); font-weight: 600; }
 .ed-tag.on { border-style: solid; border-color: var(--gold); }
+.ed-tag.cam small { color: var(--gold); }
+.ed-livehint {
+    position: absolute; left: 2vw; bottom: 3vh; pointer-events: none;
+    padding: 8px 12px; border-radius: 6px;
+    background: rgba(18, 17, 15, .88); border: 1px solid var(--line);
+    color: var(--muted); font-weight: 600; font-size: 13px;
+}
+.ed-livehint i { color: var(--gold); margin-right: 6px; }
 
 .ed-shot { display: flex; align-items: center; gap: 4px; }
 .ed-shot > b {

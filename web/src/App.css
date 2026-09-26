@@ -188,11 +188,22 @@ kbd {
 }
 .cr-input:focus-within { border-color: var(--gold); background: rgba(216,179,106,.06); }
 .cr-input i { width: 14px; color: var(--gold-dim); font-size: 13px; }
-.cr-input input {
+.cr-input input, .cr-input select {
     flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none;
     color: var(--ink); font-size: 16px; font-weight: 600; color-scheme: dark;
 }
 .cr-input input::placeholder { color: rgba(185,173,156,.45); }
+.cr-input select {
+    appearance: none; cursor: pointer; padding-right: 4px;
+}
+.cr-input select.is-placeholder { color: rgba(185,173,156,.45); font-weight: 600; }
+.cr-input:has(select)::after {
+    content: '';
+    width: 7px; height: 7px; flex: none;
+    border-right: 2px solid var(--gold-dim); border-bottom: 2px solid var(--gold-dim);
+    transform: rotate(45deg) translateY(-2px);
+    pointer-events: none;
+}
 
 .create .gender button {
     display: flex; align-items: center; justify-content: center; gap: 10px;

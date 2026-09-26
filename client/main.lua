@@ -32,32 +32,40 @@ local function trackItems()
     return items
 end
 
--- Frame a ped from the scene camera's side, looking at the upper chest
-local function focusShot(ped)
-    local F, wide = Config.Focus, state.wide
-    local head = GetPedBoneCoords(ped, 31086, 0.0, 0.0, 0.0)
-    local target = vec3(head.x, head.y, head.z - 0.2)
-    local dir = vec3(wide.x - target.x, wide.y - target.y, 0.0)
-    local len = #dir
-    dir = len > 0.01 and dir / len or vec3(0.0, 1.0, 0.0)
+local function emptyAlphas(selected)
+    local overrides = {}
+    for i, entry in ipairs(state.entries) do
+        if entry == false then
+            overrides[i] = selected == i and Config.EmptyAlphaSelected or Config.EmptyAlpha
+        end
+    end
+    return overrides
+end
 
-    local pos = vec3(target.x + dir.x * F.distance, target.y + dir.y * F.distance, head.z + F.height)
-    local rx, rz = SceneUtil.lookRotation(pos, target)
-    return { x = pos.x, y = pos.y, z = pos.z, rx = rx, ry = 0.0, rz = rz, fov = F.fov }, #(pos - target)
+local function shotFor(index)
+    local slot = state.scene.slots[index]
+    local ped = state.peds[index]
+    if slot and slot.camera then
+        local dist
+        if ped and DoesEntityExist(ped) then
+            local head = GetPedBoneCoords(ped, 31086, 0.0, 0.0, 0.0)
+            dist = #(vec3(slot.camera.x, slot.camera.y, slot.camera.z) - head)
+        end
+        return slot.camera, dist
+    end
+    if Config.Focus.enabled and ped and DoesEntityExist(ped) then
+        return SceneUtil.focusOnPed(ped, state.wide)
+    end
+    return state.wide
 end
 
 local function select(index, instant)
     if state.selected == index and not instant then return end
     state.selected = index
-    local ped = state.peds[index]
-    -- Empty-slot selections ghost everyone
-    SceneUtil.ghost(state.peds, ped and index or -1)
+    SceneUtil.ghost(state.peds, index, emptyAlphas(index))
 
     if not state.cam then return end
-    local shot, dist = state.wide, nil
-    if Config.Focus.enabled and ped then
-        shot, dist = focusShot(ped)
-    end
+    local shot, dist = shotFor(index)
     state.cam = SceneUtil.glide(state.cam, shot, instant and 0 or Config.Focus.duration, Config.Focus.dof and dist or nil)
 end
 
@@ -73,8 +81,15 @@ local function refresh(intro)
 
     for i, slot in ipairs(state.scene.slots) do
         local ch = state.entries[i]
+        local ped
         if ch then
-            local ped = SceneUtil.createPed(ch.model or defaultModel(ch.gender), slot.coords, ch.skin)
+            ped = SceneUtil.createPed(ch.model or defaultModel(ch.gender), slot.coords, ch.skin)
+        elseif ch == false then
+            ped = SceneUtil.createPed(`mp_m_freemode_01`, slot.coords)
+            SetEntityAlpha(ped, Config.EmptyAlpha, false)
+            SetEntityCollision(ped, false, false)
+        end
+        if ped then
             SceneUtil.playAnim(ped, slot.anim)
             state.peds[i] = ped
         end
@@ -88,7 +103,7 @@ local function refresh(intro)
     Wait(250) -- let the animations settle so the head bone is where it'll stay
     state.selected = nil
     if intro then
-        SceneUtil.ghost(state.peds, nil)
+        SceneUtil.ghost(state.peds, nil, emptyAlphas(nil))
     else
         select(1)
     end
@@ -273,6 +288,22 @@ local function validName(s)
     return type(s) == 'string' and #s >= 2 and #s <= 16 and s:match("^[%a][%a%-' ]*$") ~= nil
 end
 
+-- os is server-only in FiveM; the client sandbox has no os library.
+local function currentYear()
+    local ts = GetCloudTimeAsInt()
+    if not ts or ts < 0 then return 2100 end
+    local days = math.floor(ts / 86400)
+    local year = 1970
+    while year < 3000 do
+        local leap = year % 4 == 0 and (year % 100 ~= 0 or year % 400 == 0)
+        local diy = leap and 366 or 365
+        if days < diy then return year end
+        days = days - diy
+        year = year + 1
+    end
+    return 2100
+end
+
 RegisterNUICallback('create', function(data, cb)
     if not state.open or state.busy then return cb({ ok = false }) end
 
@@ -285,7 +316,7 @@ RegisterNUICallback('create', function(data, cb)
     end
     local y, m, d = tostring(data.birthdate or ''):match('^(%d%d%d%d)%-(%d%d)%-(%d%d)$')
     y, m, d = tonumber(y), tonumber(m), tonumber(d)
-    if not y or y < 1900 or y > tonumber(os.date('%Y') or 2100) or m < 1 or m > 12 or d < 1 or d > 31 then
+    if not y or y < 1900 or y > currentYear() or m < 1 or m > 12 or d < 1 or d > 31 then
         return cb({ ok = false, error = 'Enter a valid date of birth.' })
     end
 
@@ -296,7 +327,7 @@ RegisterNUICallback('create', function(data, cb)
     while used[cid] do cid += 1 end
 
     state.busy = true
-    local nationality = type(data.nationality) == 'string' and data.nationality:gsub('[%c<>]', ''):sub(1, 30) or ''
+    local nationality = type(data.nationality) == 'string' and data.nationality:gsub('[%c<>]', ''):sub(1, 50) or ''
     local newData = lib.callback.await('qbx_core:server:createCharacter', false, {
         firstname = data.firstname, lastname = data.lastname,
         nationality = nationality ~= '' and nationality or 'American',
