@@ -13,16 +13,39 @@ function animKind(a) {
     return 'anim';
 }
 
-function Num({ label, value, onChange, step, min, max }) {
+// Text while typing, number on commit: rounding every keystroke ate "." and "-"
+function Num({ label, value, onChange, step }) {
+    const [text, setText] = useState(null);
+    const cancel = useRef(false);
+    const commit = () => {
+        const n = Number(String(text).replace(',', '.'));
+        if (!cancel.current && text !== null && String(text).trim() !== '' && Number.isFinite(n)) onChange(n);
+        cancel.current = false;
+        setText(null);
+    };
     return (
         <label className="ed-num">
             <span>{label}</span>
-            <button onClick={() => onChange(value - step)}>−</button>
+            <button tabIndex={-1} onClick={() => onChange(value - step)}>−</button>
             <input
-                type="number" step={step} value={value} min={min} max={max}
-                onChange={(e) => e.target.value !== '' && onChange(Number(e.target.value))}
+                type="text" inputMode="decimal"
+                value={text ?? String(value)}
+                onFocus={(e) => { setText(String(value)); e.target.select(); }}
+                onChange={(e) => setText(e.target.value)}
+                onBlur={commit}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    else if (e.key === 'Escape') { cancel.current = true; e.currentTarget.blur(); }
+                    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        const base = Number(String(text).replace(',', '.'));
+                        const next = Math.round(((Number.isFinite(base) ? base : value) + (e.key === 'ArrowUp' ? step : -step)) * 100) / 100;
+                        onChange(next);
+                        setText(String(next));
+                    }
+                }}
             />
-            <button onClick={() => onChange(value + step)}>+</button>
+            <button tabIndex={-1} onClick={() => onChange(value + step)}>+</button>
         </label>
     );
 }
@@ -85,6 +108,7 @@ export default function Editor() {
     const [positions, setPositions] = useState([]);
     const [step, setStep] = useState(0.05);
     const [hStep, setHStep] = useState(5);
+    const [keyTarget, setKeyTarget] = useState('ped'); // ped | slotcam | scenecam
     const [confirmReset, setConfirmReset] = useState(false);
     const [playing, setPlaying] = useState(false);
     const sceneIdRef = useRef(null);
@@ -233,10 +257,10 @@ export default function Editor() {
 
     const togglePreview = () => fetchNui('editor:preview', { active: !preview });
     const walk = () => {
-        const next = mode !== 'walk';
-        setMode(next ? 'walk' : 'panel');
-        if (next) setPreview(false);
-        fetchNui('editor:release', { walk: next });
+        setMode('walk');
+        setPreview(false);
+        fetchNui('editor:release');
+        if (isEditorPreview) setTimeout(() => setMode('panel'), 1500);
     };
     const freecam = (target, start) => fetchNui('editor:freecam', { target, start });
     const shotCam = (i, end) => freecam(`intro:${i}:${end}`, scene.intro[i][end]);
@@ -253,10 +277,69 @@ export default function Editor() {
         if (c) updateSlot((sl) => { sl.camera = roundCam(c); });
     };
 
+    // Peds move relative to the view; cameras move along their own heading.
+    // Q/E turn left/right, T/G tilt a camera up/down.
+    const moveCam = (cam, { forward = 0, right = 0, up = 0, turn = 0, pitch = 0 }) => {
+        const h = (cam.rz * Math.PI) / 180;
+        return {
+            ...cam,
+            x: r2(cam.x - Math.sin(h) * forward + Math.cos(h) * right),
+            y: r2(cam.y + Math.cos(h) * forward + Math.sin(h) * right),
+            z: r2(cam.z + up),
+            rz: wrap360(cam.rz + turn),
+            rx: Math.max(-89, Math.min(89, r2(cam.rx + pitch))),
+        };
+    };
+    const nudge = async (d) => {
+        if (keyTarget === 'scenecam') {
+            if (scene?.camera) updateScene((s) => { s.camera = moveCam(s.camera, d); return s; });
+        } else if (keyTarget === 'slotcam') {
+            if (slot?.camera) updateSlot((sl) => { sl.camera = moveCam(sl.camera, d); });
+        } else if (slot) {
+            const yaw = Number(await fetchNui('editor:viewYaw')) || 0;
+            const h = (yaw * Math.PI) / 180;
+            const { forward = 0, right = 0, up = 0, turn = 0 } = d;
+            updateSlot((sl) => {
+                const c = sl.coords;
+                sl.coords = {
+                    x: r2(c.x - Math.sin(h) * forward + Math.cos(h) * right),
+                    y: r2(c.y + Math.cos(h) * forward + Math.sin(h) * right),
+                    z: r2(c.z + up),
+                    w: wrap360(c.w + turn),
+                };
+            });
+        }
+    };
+
     useEffect(() => {
         const onKey = (e) => {
             if (!open || mode !== 'panel') return;
-            if (e.key === 'Escape') playing ? fetchNui('editor:stopIntro') : preview ? togglePreview() : close();
+            const tag = e.target?.tagName;
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+            if (e.key === 'Escape') {
+                if (playing) fetchNui('editor:stopIntro');
+                else if (preview) togglePreview();
+                else close();
+                return;
+            }
+            if (playing) return;
+
+            const mul = e.shiftKey ? 5 : e.ctrlKey ? 0.2 : 1;
+            const m = step * mul, r = hStep * mul;
+            const map = {
+                w: { forward: m }, arrowup: { forward: m },
+                s: { forward: -m }, arrowdown: { forward: -m },
+                a: { right: -m }, arrowleft: { right: -m },
+                d: { right: m }, arrowright: { right: m },
+                r: { up: m }, pageup: { up: m },
+                f: { up: -m }, pagedown: { up: -m },
+                q: { turn: r }, e: { turn: -r },
+                t: { pitch: r }, g: { pitch: -r },
+            };
+            const d = map[e.key.toLowerCase()];
+            if (!d) return;
+            e.preventDefault();
+            nudge(d);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -289,12 +372,9 @@ export default function Editor() {
                 </div>
             ))}
 
-            {mode === 'walk' && (
-                <div className="ed-previewbar">
-                    <span><i className="fa-solid fa-person-walking" /> Walking — menu stays open</span>
-                    <span><kbd>Alt</kbd> cursor · <kbd>E</kbd> stop</span>
-                </div>
-            )}
+            <div className="ed-walk-hint">
+                <i className="fa-solid fa-person-walking" /> Walk to a spot, then press <kbd>E</kbd> to return to the editor
+            </div>
 
             {!preview && !playing && mode !== 'walk' && (
                 <div className="ed-livehint"><i className="fa-solid fa-location-dot" /> Live view · labels follow each ped</div>
@@ -303,6 +383,7 @@ export default function Editor() {
             {preview && (
                 <div className="ed-previewbar">
                     <span><i className="fa-solid fa-video" /> Previewing <b>{scene?.label}</b></span>
+                    <span className="ed-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>R</kbd>/<kbd>F</kbd> up/down · <kbd>Q</kbd>/<kbd>E</kbd> turn{keyTarget !== 'ped' ? <> · <kbd>T</kbd>/<kbd>G</kbd> tilt</> : null}</span>
                     <button className="ed-btn" onClick={togglePreview}>Exit preview <kbd>Esc</kbd></button>
                 </div>
             )}
@@ -362,6 +443,11 @@ export default function Editor() {
                                     ? <button className="ed-btn" onClick={() => updateCameraRef.current(null)}><i className="fa-solid fa-wand-magic-sparkles" /> Auto</button>
                                     : <button className="ed-btn" onClick={autoToCustom}><i className="fa-solid fa-sliders" /> Tweak</button>}
                             </div>
+                            {!scene.camera && (
+                                <button className="ed-btn wide subtle" onClick={() => fetchNui('editor:reframe')}>
+                                    <i className="fa-solid fa-expand" /> Re-frame auto camera to current slots
+                                </button>
+                            )}
                             {scene.camera && (
                                 <div className="ed-nums">
                                     <Num label="X" value={scene.camera.x} step={step} onChange={(v) => setCam('x', v)} />
@@ -417,7 +503,7 @@ export default function Editor() {
                             </div>
                             <div className="ed-grid3">
                                 <button className="ed-btn" disabled={scene.slots.length >= 12} onClick={addSlot}><i className="fa-solid fa-user-plus" /> Add here</button>
-                                <button className={`ed-btn${mode === 'walk' ? ' on' : ''}`} onClick={walk}><i className="fa-solid fa-person-walking" /> {mode === 'walk' ? 'Stop' : 'Walk'}</button>
+                                <button className="ed-btn" onClick={walk}><i className="fa-solid fa-person-walking" /> Walk mode</button>
                                 <button className="ed-btn" onClick={() => fetchNui('editor:goto')}><i className="fa-solid fa-location-arrow" /> Go to</button>
                             </div>
                             <button className="ed-btn wide subtle" onClick={() => fetchNui('editor:return')}><i className="fa-solid fa-rotate-left" /> Return to where I was</button>
@@ -437,6 +523,19 @@ export default function Editor() {
                             </h3>
                             <p className="ed-note">Slot 1 shows the player's first character, slot 2 the second, and so on.</p>
 
+                            <div className="ed-keybox">
+                                <span>Keyboard moves</span>
+                                <div className="ed-seg three">
+                                    <button className={keyTarget === 'ped' ? 'on' : ''} onClick={() => setKeyTarget('ped')}>Ped</button>
+                                    <button className={keyTarget === 'slotcam' ? 'on' : ''} disabled={!slot.camera}
+                                        title={slot.camera ? '' : 'Give this slot a camera first'}
+                                        onClick={() => { setKeyTarget('slotcam'); if (!preview) togglePreview(); }}>Slot cam</button>
+                                    <button className={keyTarget === 'scenecam' ? 'on' : ''} disabled={!scene.camera}
+                                        title={scene.camera ? '' : 'Tweak the scene camera first'}
+                                        onClick={() => setKeyTarget('scenecam')}>Scene cam</button>
+                                </div>
+                                <small><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> relative to view · <kbd>R</kbd>/<kbd>F</kbd> up/down · <kbd>Q</kbd>/<kbd>E</kbd> turn · <kbd>T</kbd>/<kbd>G</kbd> tilt cam · <kbd>Shift</kbd> ×5 · <kbd>Ctrl</kbd> fine</small>
+                            </div>
                             <div className="ed-row steps">
                                 <span>Step</span>
                                 {[0.01, 0.05, 0.1, 0.5].map((v) => <button key={v} className={step === v ? 'on' : ''} onClick={() => setStep(v)}>{v}m</button>)}

@@ -84,9 +84,9 @@ Config.Scenes = {
         time = { hour = 19, minute = 30 },
         camera = nil,
         slots = {
-            { coords = vec4(-136.85, -641.48, 167.82, 149.54), anim = { preset = 'crossarms' } },
-            { coords = vec4(-126.07, -641.27, 167.82, 111.23), anim = { preset = 'phone' } },
-            { coords = vec4(-125.86, -632.94, 168.52, 190.29), anim = { preset = 'sitchair' } },
+            { coords = vec4(-127.04, -640.72, 168.88, 102.80), anim = { preset = 'phonecall' } },
+            { coords = vec4(-133.91, -643.30, 167.82, 15.63),  anim = { preset = 'phone' } },
+            { coords = vec4(-138.91, -642.68, 168.26, 248.72), anim = { preset = 'sitchair' } },
         },
     },
 }
@@ -106,7 +106,9 @@ Config.Animations = {
     { id = 'sitcouch',   label = 'Sit (Couch)',          dict = 'timetable@ron@ig_3_couch', clip = 'base', flag = 1 },
     { id = 'sitledge',   label = 'Sit (Ledge)',          dict = 'rcm_barry3', clip = 'barry_3_sit_loop', flag = 1 },
     { id = 'sitphone',   label = 'Sit (Phone)',          dict = 'anim@amb@business@bgen@bgen_no_work@', clip = 'sit_phone_phoneputdown_idle_nowork', flag = 1 },
-    { id = 'phone',      label = 'On Phone',             scenario = 'WORLD_HUMAN_STAND_MOBILE' },
+    { id = 'phonecall',  label = 'Phone Call',           dict = 'cellphone@', clip = 'cellphone_call_listen_base', flag = 49,
+        prop = { model = 'prop_npc_phone_02', bone = 28422, pos = vec3(0.0, 0.0, 0.0), rot = vec3(0.0, 0.0, 0.0) } },
+    { id = 'phone',      label = 'Texting on Phone',     scenario = 'WORLD_HUMAN_STAND_MOBILE' },
     { id = 'coffee',     label = 'Coffee',               scenario = 'WORLD_HUMAN_AA_COFFEE' },
     { id = 'smoke',      label = 'Smoking',              scenario = 'WORLD_HUMAN_SMOKING' },
     { id = 'drink',      label = 'Drinking',             scenario = 'WORLD_HUMAN_DRINKING' },

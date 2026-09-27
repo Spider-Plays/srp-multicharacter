@@ -113,22 +113,53 @@ local function applyCam(cam, c)
     return true
 end
 
+-- What the view camera depends on. Slot coords are deliberately left out: the auto
+-- camera is derived from them, and re-framing on every nudge makes the view jump
+-- while the admin is lining a ped up.
+local function viewKey()
+    local scene = editor.scene
+    local slot = editor.isolate and editor.selected and scene.slots[editor.selected]
+    return json.encode({
+        scene.id, scene.camera or false, editor.isolate,
+        editor.isolate and editor.selected or false, slot and slot.camera or false,
+    })
+end
+
 -- Keep a scripted camera on the scene so slot peds stay in view while editing
-local function ensureViewCam()
+local function ensureViewCam(force)
     if not editor.open or editor.freecam or editor.playing or editor.released then return end
+    if not editor.scene then return end
+    SceneUtil.setEnvironment(editor.scene)
+
+    local key = viewKey()
+    local alive = editor.viewCam and DoesCamExist(editor.viewCam)
+    if alive and not force and key == editor.viewKey then return end
+
     local c = desiredView()
     if not c then return end
-    SceneUtil.setEnvironment(editor.scene)
-    if not editor.viewCam or not DoesCamExist(editor.viewCam) then
+    editor.viewKey = key
+    if not alive then
         SceneUtil.prepareArea(editor.scene)
         editor.viewCam = SceneUtil.createCam(c)
         if not editor.viewCam then
+            editor.viewKey = nil
             RenderScriptCams(false, false, 0, true, true)
         end
     else
         applyCam(editor.viewCam, c)
     end
 end
+
+-- Re-frame the view on demand (e.g. after moving slots with an auto camera)
+RegisterNUICallback('editor:reframe', function(_, cb)
+    cb('ok')
+    ensureViewCam(true)
+end)
+
+-- Yaw of whatever is on screen, so keyboard nudges move slots relative to the view
+RegisterNUICallback('editor:viewYaw', function(_, cb)
+    cb(GetFinalRenderedCamRot(2).z)
+end)
 
 local function trackItems()
     local items = {}
@@ -269,8 +300,8 @@ RegisterNUICallback('editor:slotCamera', function(data, cb)
     cb(SceneUtil.focusOnPed(ped, SceneUtil.cameraFor(scene)))
 end)
 
--- Walk with the menu still open. Gameplay camera so the admin can look around.
--- Hold Left Alt to put the cursor on the menu; E leaves walk mode.
+-- Walk mode, same as srp-spawn: mouse and controls go back to the game so the
+-- admin can walk to a spot; E returns to the editor.
 local walkControls = false
 
 local function stopWalk()
@@ -291,37 +322,15 @@ local function startWalk()
     if walkControls then return end
     walkControls = true
     CreateThread(function()
-        local cursor = false
         while editor.open and editor.released and not editor.freecam do
-            local alt = IsControlPressed(0, 19) or IsDisabledControlPressed(0, 19)
-            if alt then
-                if not cursor then
-                    cursor = true
-                    SetNuiFocus(true, true)
-                    SetNuiFocusKeepInput(true)
-                end
-                DisableControlAction(0, 1, true)
-                DisableControlAction(0, 2, true)
-                DisableControlAction(0, 24, true)
-                DisableControlAction(0, 25, true)
-                DisableControlAction(0, 106, true)
-                DisableControlAction(0, 140, true)
-                DisableControlAction(0, 141, true)
-                DisableControlAction(0, 142, true)
-                DisableControlAction(0, 257, true)
-            elseif cursor then
-                cursor = false
-                SetNuiFocusKeepInput(false)
-                SetNuiFocus(false, false)
-            elseif IsControlJustReleased(0, 38) then -- E
+            if IsControlJustReleased(0, 38) then -- E
                 editor.released = false
             end
             Wait(0)
         end
         walkControls = false
-        SetNuiFocusKeepInput(false)
         if editor.open and not editor.freecam and not editor.playing then
-            ensureViewCam()
+            ensureViewCam(true)
             SetNuiFocus(true, true)
             SendNUIMessage({ action = 'editorFocus' })
         end

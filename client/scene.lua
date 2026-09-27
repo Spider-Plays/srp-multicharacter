@@ -33,9 +33,34 @@ function SceneUtil.resolveAnim(anim)
     return anim
 end
 
+-- Hand props (phones etc.) for dict/clip animations; scenarios bring their own
+local props = {}
+
+local function removeProp(ped)
+    local obj = props[ped]
+    if obj and DoesEntityExist(obj) then DeleteEntity(obj) end
+    props[ped] = nil
+end
+
+local function attachProp(ped, p)
+    local model = type(p.model) == 'string' and joaat(p.model) or p.model
+    if not IsModelInCdimage(model) or not pcall(lib.requestModel, model, 5000) then
+        return lib.print.warn(('prop "%s" failed to load'):format(p.model))
+    end
+    local c = GetEntityCoords(ped)
+    local obj = CreateObject(model, c.x, c.y, c.z, false, false, false)
+    SetModelAsNoLongerNeeded(model)
+    local pos, rot = p.pos or vec3(0, 0, 0), p.rot or vec3(0, 0, 0)
+    AttachEntityToEntity(obj, ped, GetPedBoneIndex(ped, p.bone or 28422),
+        pos.x, pos.y, pos.z, rot.x, rot.y, rot.z, true, true, false, false, 2, true)
+    SetEntityCollision(obj, false, false)
+    props[ped] = obj
+end
+
 function SceneUtil.playAnim(ped, anim)
     if not DoesEntityExist(ped) then return end
     ClearPedTasksImmediately(ped)
+    removeProp(ped)
     local a = SceneUtil.resolveAnim(anim)
     if not a then return end
 
@@ -47,6 +72,7 @@ function SceneUtil.playAnim(ped, anim)
         end
         TaskPlayAnim(ped, a.dict, a.clip, 8.0, -8.0, -1, a.flag or 1, 0.0, false, false, false)
         RemoveAnimDict(a.dict)
+        if a.prop then attachProp(ped, a.prop) end
     end
 end
 
@@ -91,6 +117,7 @@ end
 
 function SceneUtil.deletePeds(peds)
     for k, ped in pairs(peds) do
+        removeProp(ped)
         if DoesEntityExist(ped) then DeleteEntity(ped) end
         peds[k] = nil
     end

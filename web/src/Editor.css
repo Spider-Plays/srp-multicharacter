@@ -127,7 +127,7 @@
     background: rgba(18,17,15,.9); border: 1px solid var(--line);
     font-weight: 600;
 }
-#editor.walking .ed-previewbar { pointer-events: none; }
+
 .ed-previewbar i { color: var(--gold); margin-right: 4px; }
 .ed-tag {
     position: absolute; transform: translate(-50%, -100%);
@@ -156,3 +156,24 @@
 .ed-shot .ed-btn { flex: 1; padding: 0 6px; }
 .ed-dur { display: flex; align-items: center; gap: 3px; flex: 0 0 64px; font-weight: 700; color: var(--muted); }
 .ed-dur input { text-align: center; padding: 0 2px; }
+
+.ed-keybox { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 6px; background: rgba(216,179,106,.05); border: 1px solid rgba(216,179,106,.18); }
+.ed-keybox > span { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+.ed-keybox small { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.ed-seg.three { grid-template-columns: repeat(3, 1fr); }
+.ed-seg button:disabled { opacity: .35; cursor: default; }
+.ed-keys { color: var(--muted); font-size: 13px; }
+
+/* ---------- Walk mode (matches srp-spawn) ---------- */
+#editor.walking .ed-panel { opacity: .35; transform: translateX(20px); pointer-events: none; }
+#editor.walking .ed-tag, #editor.walking .ed-livehint { display: none; }
+.ed-walk-hint {
+    position: absolute; left: 50%; bottom: 48px; pointer-events: none;
+    transform: translate(-50%, 20px);
+    padding: 12px 20px; border-radius: 10px;
+    background: rgba(18,15,12,.92); border: 1px solid rgba(216,179,106,.45);
+    font-size: 16px; font-weight: 600; white-space: nowrap;
+    opacity: 0; transition: opacity .25s ease, transform .25s ease;
+}
+.ed-walk-hint i { color: var(--gold); margin-right: 6px; }
+#editor.walking .ed-walk-hint { opacity: 1; transform: translate(-50%, 0); }
